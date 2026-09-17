@@ -89,8 +89,9 @@ python scripts/build_grid.py --rank 3400                      # shows the rankin
 python scripts/build_grid.py --rank 3400 --roles 1,2 --write  # installs it (close Dota first)
 ```
 
-`--rank` takes an MMR number or a medal. Works on Windows, Linux and macOS. Your existing
-grids are kept and the old file is backed up.
+`--rank` takes an MMR number or a medal. Built and tested on Windows; Linux and macOS paths
+are supported but less tested - if your Steam folder isn't found, pass `--steam-dir`. Your
+existing grids are kept and the old file is backed up.
 
 ## Will it work at my rank?
 
