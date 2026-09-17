@@ -30,7 +30,8 @@ VETO_WR = 0.49             # drop heroes whose all-role win rate in YOUR bracket
 # Only used to warn players below Ancient that the list fits them less well.
 TRANSFER = {1: 0.15, 2: 0.24, 3: 0.33, 4: 0.47, 5: 0.57, 6: 0.74, 7: 0.91, 8: 1.0}
 MEDALS = ["herald", "guardian", "crusader", "archon", "legend", "ancient", "divine", "immortal"]
-MMR_FLOORS = [0, 770, 1540, 2310, 3080, 3850, 4620, 5620]      # approximate medal boundaries
+MMR_FLOORS = [0, 770, 1540, 2310, 3080, 3850, 4620, 5620]      # approximate medal boundaries; the
+# July 2026 rescale compressed Immortal MMR only, Divine and below are unchanged
 
 ROLES = {1: ("pos 1", "1 Carry"), 2: ("pos 2", "2 Mid"), 3: ("pos 3", "3 Offlane"),
          4: ("pos 4", "4 Support"), 5: ("pos 5", "5 Hard Support")}
