@@ -10,6 +10,12 @@ choice is banned.
 
 No Dota Plus. No accounts. No API keys. Answer three questions and open Dota.
 
+<p align="center">
+  <img src="docs/grid.png" width="400" alt="Dota 2 hero grid in the in-game hero picker: the best heroes per role (carry, mid, offlane, support, hard support), ordered best-first">
+</p>
+
+Behind every row is a ranking like this:
+
 ```
 3 Offlane   (patch 7.41f, player at Ancient)      edge  +-noise   win rate in your bracket
    Enigma                                       +7.4pp   +-1.5          53.1%
