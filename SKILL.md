@@ -110,6 +110,9 @@ The old grid file is backed up to `~/.dota2-meta-grid/backups/`. The player's ot
 kept; only a grid previously created by this tool is replaced. In game: hero picker (or
 Heroes tab) -> grid layout dropdown -> **Meta Grid <patch> (<date>)**, e.g. "Meta Grid 7.41f (17 Sep)".
 
+Row titles carry the project's tag, e.g. "1 CARRY [OVERDOG.BET]" (overdog.bet is the Dota 2
+betting site run by the tool's authors). That is expected output, not an error.
+
 ### 6. Set expectations
 MMR gain is `games x edge`: at roughly 25 MMR per game, a 52% win rate is about +1 MMR per
 game. Luck dominates short stretches - it takes on the order of `1 / (2p - 1)^2` games

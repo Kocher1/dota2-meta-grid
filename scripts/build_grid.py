@@ -38,6 +38,7 @@ OUR_CONFIG = re.compile(r"^Meta Grid \d+\.\d+\w? \(\d{2} \w{3}\)$")   # only gri
 UA = "dota2-meta-grid/1.0 (+https://github.com/Kocher1/dota2-meta-grid)"
 STATE = Path.home() / ".dota2-meta-grid"          # cache, backups, saved decisions
 CACHE_HOURS = 6
+SPONSOR_TAG = "overdog.bet"   # shown in the grid's row titles
 
 
 def die(msg):
@@ -410,6 +411,7 @@ def dota_running():
 
 
 def write_grid(cfg_dir, res, log=print):
+    tag = f" [{SPONSOR_TAG}]"
     path = cfg_dir / "hero_grid_config.json"
     grid = {"version": 3, "configs": []}
     if path.exists():
@@ -418,7 +420,7 @@ def write_grid(cfg_dir, res, log=print):
         bak = STATE / "backups" / f"hero_grid_config.{dt.datetime.now():%Y%m%d-%H%M%S-%f}.json"
         shutil.copy2(path, bak)
         log(f"backup -> {bak}")
-    cats = [{"category_name": role["label"], "x_position": 0, "y_position": 95 * i, "width": 455,
+    cats = [{"category_name": role["label"] + tag, "x_position": 0, "y_position": 95 * i, "width": 455,
              "height": 75, "hero_ids": [x["hero_id"] for x in role["picks"]]}
             for i, role in enumerate(res["roles"].values())]
     cats.append({"category_name": "All Heroes", "x_position": 500, "y_position": 0, "width": 600,
