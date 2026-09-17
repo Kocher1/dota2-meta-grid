@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.DS_Store
+# user state never belongs in the repo (the script keeps it in ~/.dota2-meta-grid)
+niche.json
+backups/
+cache/
+*.dat
+hero_grid_config*.json
