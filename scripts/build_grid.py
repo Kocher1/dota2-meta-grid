@@ -6,7 +6,7 @@
     python build_grid.py --rank 3200 --json          machine-readable output for an agent
 
 Data (no accounts, no API keys):
-  * dota2protracker.com   role-split pub win rates, 6500+ MMR, last 8 days / current patch
+  * stats.spectral.gg     role-split win rates in Immortal ranked pubs, one report per patch
   * api.opendota.com      win rates in YOUR rank bracket (no role split), used as a veto
   * dota2.com datafeed    latest patch and the heroes it changed
   * <steam>/userdata/<id>/570/remote/cfg/stats.dat   your own lifetime record (optional)
@@ -26,9 +26,11 @@ TAU_UNCHANGED = 0.001      # ... heroes it did not touch (measured ~0)
 PERSONAL_WEIGHT = 0.25     # your lifetime record is a tie-breaker ...
 PERSONAL_CAP = 0.015       # ... and never moves a hero by more than 1.5pp
 VETO_WR = 0.49             # drop heroes whose all-role win rate in YOUR bracket is below this
-# Share of a 6500+ MMR edge that carries over to each OpenDota bracket (measured Sep 2026).
+HARD_GAP = 0.10            # newcomers (1-2 games) trail the hero's average by this much: hard to learn
+NEW_TO_YOU = 20            # ... and you have fewer lifetime games on it than this: flagged, not re-scored
+# Share of an Immortal-pub edge that carries over to each OpenDota bracket (measured Oct 2026).
 # Only used to warn players below Ancient that the list fits them less well.
-TRANSFER = {1: 0.15, 2: 0.24, 3: 0.33, 4: 0.47, 5: 0.57, 6: 0.74, 7: 0.91, 8: 1.0}
+TRANSFER = {1: 0.31, 2: 0.40, 3: 0.46, 4: 0.58, 5: 0.69, 6: 0.79, 7: 0.92, 8: 1.0}
 MEDALS = ["herald", "guardian", "crusader", "archon", "legend", "ancient", "divine", "immortal"]
 MMR_FLOORS = [0, 770, 1540, 2310, 3080, 3850, 4620, 5620]      # approximate medal boundaries; the
 # July 2026 rescale compressed Immortal MMR only, Divine and below are unchanged
@@ -39,6 +41,10 @@ OUR_CONFIG = re.compile(r"^Meta Grid \d+\.\d+\w? \(\d{2} \w{3}\)$")   # only gri
 UA = "dota2-meta-grid/1.0 (+https://github.com/Kocher1/dota2-meta-grid)"
 STATE = Path.home() / ".dota2-meta-grid"          # cache, backups, saved decisions
 CACHE_HOURS = 6
+STALE_HOURS = 72           # if a site refuses, older cached data is refused too, not silently reused
+SPECTRAL = "https://stats.spectral.gg/lrg2/api/"
+SPECTRAL_POS = {1: "1.1", 2: "1.2", 3: "1.3", 4: "0.3", 5: "0.1"}   # core flag . lane; 0.3 = soft support
+PRIOR_DAYS = 8.5           # until the patch is this old, the previous patch's games form the prior
 SPONSOR_TAG = "overdog.bet"   # shown in the grid's row titles
 
 
@@ -70,12 +76,13 @@ def fetch_json(url, refresh=False):
         except Exception as e:
             err = e
     if raw is None:
-        if age_h is not None:                   # better a day-old table than no grid
+        if age_h is not None and age_h < STALE_HOURS:      # better a day-old table than no grid
             print(f"warning: {host} refused the request ({err}); reusing data from {age_h:.0f}h ago",
                   file=sys.stderr)
             return json.loads(cache.read_text(encoding="utf-8"))
-        die(f"{host} refused the request ({err}).\nIt rate-limits automated clients - wait 15-30 minutes "
-            "and run again. Downloads are cached, so a retry resumes where it stopped.")
+        old = f" The cached copy is {age_h / 24:.0f} days old, too old to use." if age_h else ""
+        die(f"{host} refused the request ({err}).{old}\nTry again in 15-30 minutes; downloads are cached, "
+            "so a retry resumes where it stopped. If it keeps failing, the site may have changed its API.")
     data = json.loads(raw.decode("utf-8"))
     cache.parent.mkdir(parents=True, exist_ok=True)
     tmp = cache.with_suffix(".tmp")
@@ -84,12 +91,46 @@ def fetch_json(url, refresh=False):
     return data
 
 
-def d2pt(position, period, refresh):
-    q = urllib.parse.urlencode({"mmr": 7000, "position": position, "order_by": "matches",
-                                "min_matches": 1, "period": period, "legacy": "false"},
-                               quote_via=urllib.parse.quote)     # the site rejects '+' for spaces
-    rows = fetch_json("https://dota2protracker.com/api/heroes/stats?" + q, refresh)
-    return [x for x in rows if x.get("hero_variant", 0) == 0] if isinstance(rows, list) else []
+def spectral_reports(patch_ts, refresh):
+    """(current, previous) Spectral 'Immortal Rank Meta Trends' reports as (tag, days covered, matches).
+    Matched by match dates, not names: Spectral merges some letter patches ("7.41(a)") that Valve
+    lists separately. current is None until the report holds a day of games from this patch."""
+    rows = fetch_json(SPECTRAL + "?mod=list&cat=ranked_patches", refresh).get("result", {}).get("reports", {})
+    reps = sorted((int(r["first_match"]["date"]), int(r["last_match"]["date"]), r["tag"], int(r.get("matches") or 0))
+                  for r in rows.values()
+                  if r.get("tag", "").startswith("imm_ranked_") and "Meta Trends" in r.get("name", ""))
+    if not reps:
+        die("stats.spectral.gg listed no Immortal ranked reports - its API may have changed.")
+    days = [(tag, (last - first) / 86400, n) for first, last, tag, n in reps]
+    if reps[-1][1] >= patch_ts + 86400:
+        return days[-1], (days[-2] if len(days) > 1 else None)
+    return None, days[-1]
+
+
+def role_games(tag, role, refresh):
+    """hero_id -> (wins, matches) in one position of a Spectral report."""
+    res = fetch_json(f"{SPECTRAL}?mod=heroes-positions&league={tag}", refresh).get("result")
+    rows = res.get(SPECTRAL_POS[role]) if isinstance(res, dict) else None
+    if not rows:
+        die(f"stats.spectral.gg has no position data in report '{tag}' - its API may have changed.")
+    return {int(h): (round(v["matches_s"] * v["winrate_s"]), v["matches_s"])
+            for h, v in rows.items() if isinstance(v, dict) and v.get("matches_s")}
+
+
+def hero_signals(rep, refresh):
+    """hero_id -> {ban rate, newcomer win rate, average win rate} from a Spectral report (all roles).
+    Display only: they never change the score. Missing endpoints just leave the fields empty."""
+    tag, _, matches = rep
+    out = {}
+    draft = fetch_json(f"{SPECTRAL}?mod=heroes-draft&league={tag}", refresh).get("result")
+    total = draft.get("total") if isinstance(draft, dict) else None
+    for h, v in (total or {}).items() if matches else ():
+        out.setdefault(int(h), {})["ban"] = int(v.get("matches_banned") or 0) / matches
+    curve = fetch_json(f"{SPECTRAL}?mod=heroes-wrplayers&league={tag}", refresh).get("result")
+    for h, v in (curve if isinstance(curve, dict) else {}).items():
+        if isinstance(v, dict) and v.get("q1_wr_avg") is not None and v.get("winrate_avg") is not None:
+            out.setdefault(int(h), {}).update(newcomer=v["q1_wr_avg"], average=v["winrate_avg"])
+    return out
 
 
 def latest_patch(refresh):
@@ -192,12 +233,14 @@ def eb_prior(rows, min_n=150):
         return 0.5, 400.0, 0.025 ** 2
     m = sum(w for w, _ in fit) / sum(n for _, n in fit)
     ps = [w / n for w, n in fit]
-    vt = max(stt.pvariance(ps) - stt.mean(p * (1 - p) / n for p, (_, n) in zip(ps, fit)), 1e-6)
+    # floor at a 1pp spread: a tiny or stale sample can make the estimate collapse to ~0, which
+    # would shrink every hero onto the mean and leave the personal record to order the row
+    vt = max(stt.pvariance(ps) - stt.mean(p * (1 - p) / n for p, (_, n) in zip(ps, fit)), 0.01 ** 2)
     return m, m * (1 - m) / vt - 1, vt
 
 
 def high_mmr_edges(pre, post, changed):
-    """hero -> (edge vs role mean, sd) from 6500+ data. Pre-patch games form a prior that is
+    """hero -> (edge vs role mean, sd) from Immortal data. Pre-patch games form a prior that is
     widened by the expected patch drift and then updated with post-patch games. With no
     pre-patch days in the window this is plain shrinkage of the post-patch numbers."""
     have_pre = sum(n for _, n in pre.values()) > 0
@@ -318,29 +361,34 @@ def build(cfg_dir, bracket, roles, per_role, personal_weight, refresh, od=None):
     names = {h["id"]: h["localized_name"] for h in od}
     own = bracket_winrates(od, bracket) if bracket and bracket < 8 else {}
     transfer = TRANSFER[bracket] if bracket else 1.0
-    me = personal_records(cfg_dir) if (cfg_dir and personal_weight > 0) else {}
+    me = personal_records(cfg_dir) if cfg_dir else {}     # weight 0 still shows the record, adds nothing
     decisions = load_decisions()
 
+    cur_rep, prev_rep = spectral_reports(patch_ts, refresh)
+    if not cur_rep and patch_age >= PRIOR_DAYS:
+        die(f"stats.spectral.gg has no report for patch {patch} yet, {patch_age:.0f} days after release. "
+            "Try again later.")
+    sig = hero_signals(cur_rep or prev_rep, refresh)
     res = {"patch": patch, "patch_age_days": round(patch_age, 1), "provisional": patch_age < 5,
            "rank_bracket": MEDALS[bracket - 1] if bracket else None, "transfer": transfer,
            "personal_heroes": len(me), "saved_decisions": decisions, "units": "all *_pp fields are "
-           "win-rate percentage points vs an average hero in the role", "roles": {}}
+           "win-rate percentage points vs an average hero in the role",
+           "reports": {"current": cur_rep and cur_rep[0], "prior": None, "signals": (cur_rep or prev_rep)[0]},
+           "roles": {}}
+    # While the patch is young, the previous patch's report is the prior, scaled down to the
+    # games of the pre-patch part of an 8-day window (the setup the method was tested on).
+    prior_w = 0.0
+    if prev_rep and patch_age < PRIOR_DAYS:
+        prior_w = min(1.0, (PRIOR_DAYS - patch_age) / max(prev_rep[1], 1.0))
+        res["reports"]["prior"] = prev_rep[0]
     for r in roles:
         pos, label = ROLES[r]
-        # Post-patch games come from the site's patch table (filtered by game version). While the
-        # patch is younger than the 8-day window, pre-patch games are the 8-day totals minus the
-        # patch totals. The per-day rows are NOT used: across a patch boundary they disagree with
-        # the patch table (dates lag), see references/METHOD.md.
-        cur = d2pt(pos, "patch", refresh)
-        post = {x["hero_id"]: (x["wins"], x["matches"]) for x in cur}
-        pre, week = {}, cur
-        if patch_age < 8.5:
-            week = d2pt(pos, 8, refresh)
-            for x in week:
-                pw, pn = post.get(x["hero_id"], (0, 0))
-                pre[x["hero_id"]] = (max(x["wins"] - pw, 0), max(x["matches"] - pn, 0))
-        total = sum(x["matches"] for x in week) or 1
-        share = {x["hero_id"]: x["matches"] / total for x in week}
+        post = role_games(cur_rep[0], r, refresh) if cur_rep else {}
+        pre = {h: (w * prior_w, n * prior_w) for h, (w, n) in role_games(prev_rep[0], r, refresh).items()} \
+            if prior_w else {}
+        games = {h: pre.get(h, (0, 0))[1] + post.get(h, (0, 0))[1] for h in set(pre) | set(post)}
+        total = sum(games.values()) or 1
+        share = {h: n / total for h, n in games.items()}
         high = high_mmr_edges(pre, post, changed)
 
         allow = set(decisions["allow"].get(str(r), []))
@@ -353,14 +401,19 @@ def build(cfg_dir, bracket, roles, per_role, personal_weight, refresh, od=None):
                 denied.append(names[h])
                 continue
             w, l, pe = me.get(h, (0, 0, 0.0))
-            adj = max(-PERSONAL_CAP, min(PERSONAL_CAP, personal_weight * pe))
+            adj = max(-PERSONAL_CAP, min(PERSONAL_CAP, personal_weight * pe)) if personal_weight else 0.0
             niche = share[h] < NICHE_SHARE
             weak = h in own and own[h] < VETO_WR      # losing in the player's own bracket
+            s = sig.get(h, {})
+            gap = s["average"] - s["newcomer"] if "newcomer" in s else None
             row = {"hero_id": h, "hero": names[h], "score_pp": pp(edge + adj), "meta_pp": pp(edge),
                    "noise_pp": pp(sd), "own_bracket_winrate_pct": pp(own.get(h)),
                    "personal_adj_pp": pp(adj), "personal_record": f"{w}-{l}",
                    "role_pick_share_pct": round(100 * share[h], 1), "changed_this_patch": h in changed,
-                   "niche_status": (("approved" if names[h] in allow else "undecided") if niche else None)}
+                   "niche_status": (("approved" if names[h] in allow else "undecided") if niche else None),
+                   "ban_rate_pct": pp(s.get("ban")), "newcomer_winrate_pct": pp(s.get("newcomer")),
+                   "learning_gap_pp": pp(gap),
+                   "hard_and_new_to_you": (gap is not None and gap >= HARD_GAP and w + l < NEW_TO_YOU) if me else None}
             (vetoed if weak else rows).append(row)
         rows.sort(key=lambda x: -x["score_pp"])
         res["roles"][str(r)] = {
@@ -368,37 +421,48 @@ def build(cfg_dir, bracket, roles, per_role, personal_weight, refresh, od=None):
             "vetoed_weak_in_your_bracket": [f"{x['hero']} ({x['own_bracket_winrate_pct']:.1f}%)" for x in
                                             sorted(vetoed, key=lambda x: -x["score_pp"])
                                             if rows[:per_role] and x["score_pp"] > rows[:per_role][-1]["score_pp"]],
-            "sample_matches": {"pre_patch": sum(n for _, n in pre.values()) // 2,
-                               "post_patch": sum(n for _, n in post.values()) // 2}}
+            "sample_matches": {"pre_patch": int(sum(n for _, n in pre.values()) // 2),
+                               "post_patch": int(sum(n for _, n in post.values()) // 2)}}
     res["all_heroes"] = sorted(names, key=lambda i: names[i])
     return res
 
 
 def print_table(res):
-    rank = res["rank_bracket"] or "not given (using 6500+ MMR numbers as-is)"
+    rank = res["rank_bracket"] or "not given (using Immortal numbers as-is)"
     print(f"patch {res['patch']} ({res['patch_age_days']} days old) | rank: {rank} | "
           f"personal record: {res['personal_heroes']} heroes")
     if res["provisional"]:
         print("note: the patch is under 5 days old - estimates are provisional, re-run in a few days.")
     if res["rank_bracket"] and res["transfer"] < 0.7:
-        print(f"note: win rates come from 6500+ MMR games. At {res['rank_bracket']} only about "
+        print(f"note: win rates come from Immortal ranked games. At {res['rank_bracket']} only about "
               f"{round(100 * res['transfer'])}% of such an edge carries over - treat the list as a starting point; "
               "heroes that lose in your own bracket are already removed.")
     for role in res["roles"].values():
         m = role["sample_matches"]
         print(f"\n{role['label']}   [sample: {m['pre_patch']} matches before the patch, {m['post_patch']} since]")
-        print(f"   {'hero':<20}    score  +-noise | 6500+ win-rate edge | your bracket WR | your record  | role pick share")
+        print(f"   {'hero':<20}     score  +-noise | Immortal WR edge    | your bracket WR | your record  "
+              "| role pick share | banned")
         for x in role["picks"]:
-            flag = ("*" if x["changed_this_patch"] else " ") + {"undecided": "?", "approved": "~", None: " "}[x["niche_status"]]
+            flag = ("*" if x["changed_this_patch"] else " ") + {"undecided": "?", "approved": "~", None: " "}[x["niche_status"]] \
+                + ("!" if x["hard_and_new_to_you"] else " ")
             own = f"{x['own_bracket_winrate_pct']:.1f}%" if x["own_bracket_winrate_pct"] is not None else "n/a"
+            ban = f"{x['ban_rate_pct']:.0f}%" if x["ban_rate_pct"] is not None else "n/a"
             print(f"   {x['hero']:<20}{flag} {x['score_pp']:+5.1f}pp +-{x['noise_pp']:.1f} | {x['meta_pp']:+18.1f}  | "
-                  f"{own:>14}  | {x['personal_record']:>7} {x['personal_adj_pp']:+.1f} | {x['role_pick_share_pct']:.1f}%")
+                  f"{own:>14}  | {x['personal_record']:>7} {x['personal_adj_pp']:+.1f} | "
+                  f"{x['role_pick_share_pct']:>14.1f}% | {ban:>6}")
+        hard = [x for x in role["picks"] if x["hard_and_new_to_you"]]
+        if hard:
+            print("   ! hard to learn and new to you: " + ", ".join(
+                f"{x['hero']} (newcomers win {x['newcomer_winrate_pct']:.1f}%, "
+                f"{x['learning_gap_pp']:.0f}pp under its average; you {x['personal_record']})" for x in hard))
         if role["vetoed_weak_in_your_bracket"]:
             print("   removed (losing in your bracket): " + ", ".join(role["vetoed_weak_in_your_bracket"]))
         if role["denied"]:
             print("   skipped (you said you don't play them here): " + ", ".join(role["denied"]))
     print("\n* changed in this patch   ~ niche pick you approved   ? niche pick (<1% of the role's picks): "
-          "do you play it? answer with --allow / --deny")
+          "do you play it? answer with --allow / --deny\n"
+          f"! hard to learn (newcomers trail its average by {round(100 * HARD_GAP)}pp+) and you have under "
+          f"{NEW_TO_YOU} games on it   banned = share of games where the hero is banned (all roles)")
 
 
 def dota_running():

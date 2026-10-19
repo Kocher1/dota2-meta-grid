@@ -44,7 +44,7 @@ Three things follow from this table:
 
 We tested the ranking out of sample, on games it had never seen: the top 3 heroes it picked
 per role won about **4 points more** than the average hero in that role, the top 7 about
-**3 points more** (in top-level pubs). You won't capture all of that - but even half of it is
+**3 points more** (in Immortal pubs). You won't capture all of that - but even half of it is
 the jump from the 50% row to the 52% row above.
 
 How to use it:
@@ -64,7 +64,8 @@ How to use it:
 > Install the skill from https://github.com/Kocher1/dota2-meta-grid and build my Dota 2 hero grid.
 
 It asks for your rank, the roles you play and how many heroes you want per row, checks with
-you before keeping specialist heroes (Meepo, Visage and friends), then writes the grid. Close
+you before keeping specialist heroes (Meepo, Visage and friends) or hard heroes you have barely
+played, then writes the grid. Close
 Dota when it asks, reopen it, go to **Heroes** and choose **Meta Grid** in the grid dropdown.
 
 <details>
@@ -93,14 +94,23 @@ python scripts/build_grid.py --rank 3400 --roles 1,2 --write  # installs it (clo
 are supported but less tested - if your Steam folder isn't found, pass `--steam-dir`. Your
 existing grids are kept and the old file is backed up.
 
+**Installed it before 19 October 2026?** Update it. Older versions read Dota2ProTracker,
+which no longer lets outside tools in, so they stop working:
+
+```bash
+git -C ~/.claude/skills/dota2-meta-grid pull
+```
+
+(For Codex use `~/.codex/skills/dota2-meta-grid`; for a plain clone, run `git pull` inside it.)
+
 ## Will it work at my rank?
 
-Best from **Ancient upward**. Role-by-role win rates only exist for top-level pubs (6500+ MMR),
-and a hero's edge there doesn't fully survive the trip down: about 90% of it carries over at
-Divine, 75% at Ancient, 55% at Legend, under half at Archon and below. Whatever your rank,
-heroes that are losing in *your* bracket are removed - so lower-ranked players still get a
-sane list, but should treat it as a starting point and be wary of heroes that need a
-coordinated team.
+Best from **Ancient upward**. Free role-by-role win rates only exist for Immortal pubs (about
+5,600-8,500 MMR), and a hero's edge there doesn't fully survive the trip down: about 90% of it
+carries over at Divine, 80% at Ancient, 70% at Legend, 60% at Archon, under half below.
+Whatever your rank, heroes that are losing in *your* bracket are removed - so lower-ranked
+players still get a sane list, but should treat it as a starting point and be wary of heroes
+that need a coordinated team.
 
 Medal to MMR, for reference (approximate - Valve's July 2026 rescale only compressed Immortal
 numbers, Divine and below are unchanged):
@@ -114,7 +124,7 @@ numbers, Divine and below are unchanged):
 
 ## How the ranking is made
 
-- **Win rate per role**, from top-level pubs on the current patch.
+- **Win rate per role**, from Immortal ranked pubs on the current patch.
 - **No small-sample heroes on top.** 60% over 130 games is mostly luck, so it is treated as
   roughly 52%. In our backtests this one correction beat ranking by raw win rate.
 - **Patch-aware.** Games from before the patch count as a starting guess, not as truth; heroes
@@ -125,15 +135,18 @@ numbers, Divine and below are unchanged):
   people who spam them. You get asked before they stay in a row.
 - **Your own record is a tie-breaker**, read locally from Dota's files and worth at most
   1.5 points. Meta first.
+- **Hard heroes come with a warning.** If people new to a hero win 10+ points less than its
+  average (Meepo, Arc Warden, Io...) and you have under 20 games on it, it is marked and you
+  are asked whether to keep it. Every pick also shows how often it gets banned, so you know
+  when to have a second hero ready.
 
-An example of what sits behind a row (patch 7.41f, 17 Sep 2026, player at Ancient):
+An example of what sits behind a row (patch 7.41f, 19 Oct 2026, player at Ancient):
 
 ```
 4 Support                 edge over an average pos 4     win rate in your bracket
-   Bounty Hunter                  +7.2                          55.2%
-   Nyx Assassin                   +3.8                          52.5%
-   Spirit Breaker                 +2.9                          52.2%
-   removed (losing in your bracket): Clockwerk 48.4%
+   Bounty Hunter                  +7.2                          53.5%
+   Nyx Assassin                   +4.2                          53.0%
+   Spirit Breaker                 +3.4                          52.2%
 ```
 
 Every number and rule above was chosen by backtest. The tests, results and known limits are
@@ -148,13 +161,14 @@ write while Dota is running.
 **Do I need Dota Plus?** No.
 
 **Where does the data come from?** Role statistics from
-[Dota2ProTracker](https://dota2protracker.com), bracket win rates from
+[Spectral](https://stats.spectral.gg)'s Immortal ranked reports, bracket win rates from
 [OpenDota](https://www.opendota.com), patch notes from dota2.com. The script is a polite
-client: about a dozen small requests per run, paced and cached for six hours. If you use this
-a lot, consider supporting those sites - they do the hard part.
+client: about five small requests per run, paced and cached for six hours. If you use this
+a lot, consider supporting those sites - they do the hard part. (Until October 2026 the role
+statistics came from Dota2ProTracker, which has since closed its API to outside tools.)
 
-**It says the site refused the request.** The stats site rate-limits scripts. Wait 15-30
-minutes and run it again; finished downloads are cached.
+**It says the site refused the request.** Wait 15-30 minutes and run it again; finished
+downloads are cached. If it keeps failing, the site has probably changed - please open an issue.
 
 **Does it look at counters or my team's draft?** No - see "Use it for early picks" above.
 
@@ -165,4 +179,4 @@ of a bookmaker. Think you read the pro meta as well as your pubs? That's the pla
 
 ## License
 
-MIT. Not affiliated with Valve, Dota2ProTracker or OpenDota. Dota 2 is a trademark of Valve Corporation.
+MIT. Not affiliated with Valve, Spectral, Dota2ProTracker or OpenDota. Dota 2 is a trademark of Valve Corporation.
